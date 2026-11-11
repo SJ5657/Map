@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>구글 맵 3D 캐릭터 탐험 (Express + Babylon.js)</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Babylon.js Engine and dependencies -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      user-select: none;
+      background-color: #0f172a;
+    }
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      outline: none;
+    }
+    /* Custom scrollbar for HUD panels */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(59, 130, 246, 0.5);
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="relative text-slate-100">
+
+  <!-- 3D Canvas -->
+  <canvas id="renderCanvas"></canvas>
+
+  <!-- Game HUD Overlay -->
+  <div id="hud" class="pointer-events-none absolute inset-0 flex flex-col justify-between p-4 sm:p-6 z-10">
+    
+    <!-- 상단 바: 위치 및 GPS 정보 & 백엔드 상태 -->
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      
+      <!-- GPS 위치 표시 패널 -->
+      <div class="pointer-events-auto bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl p-4 shadow-xl flex items-center gap-4 min-w-[280px]">
+        <div class="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-400/30 flex items-center justify-center text-blue-400 shrink-0">
+          <i data-lucide="map-pin" class="w-5 h-5"></i>
+        </div>
+        <div class="flex-1">
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center justify-between gap-2">
+            <span>시뮬레이션 GPS</span>
+            <div class="flex items-center gap-1.5">
+              <!-- 백엔드 서버 상태 인디케이터 -->
+              <span id="backendStatus" class="inline-flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> 서버 연결 중...
+              </span>
+              <span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> 실시간
+              </span>
+            </div>
+          </div>
+          <div id="locationName" class="text-base font-bold text-white truncate mt-0.5">서울 강남구 청담역 (7호선)</div>
+          <div class="text-xs font-mono text-blue-300 flex gap-3 mt-0.5">
+            <span>위도: <span id="latVal">37.519200</span>°N</span>
+            <span>경도: <span id="lngVal">127.053100</span>°E</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 위치 빠른 이동 버튼 (백엔드 API에서 동적 생성됨) -->
+      <div class="pointer-events-auto flex items-center gap-2 bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl p-2 shadow-xl">
+        <span class="text-xs font-semibold px-3 text-slate-400 hidden md:inline">빠른 이동:</span>
+        <div id="locationButtons" class="flex items-center gap-1.5">
+          <!-- JS에서 동적으로 버튼 추가 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 우측: 지도 컨트롤 & 테마 전환 -->
+    <div class="pointer-events-auto absolute top-24 right-4 sm:right-6 flex flex-col gap-2">
+      <button id="btnMapLight" title="라이트 모드 지도" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="map" class="w-5 h-5 text-blue-400"></i>
+      </button>
+      <button id="btnMapDark" title="다크 모드 지도" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="moon" class="w-5 h-5 text-indigo-400"></i>
+      </button>
+      <button id="btnMapSat" title="위성 스타일 지도" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="layers" class="w-5 h-5 text-emerald-400"></i>
+      </button>
+      <button id="btnTogglePOI" title="3D 장소(POI) 마커 켜기/끄기" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="map-pin" class="w-5 h-5 text-rose-400"></i>
+      </button>
+      <div class="h-px bg-slate-700/60 my-1"></div>
+      <button id="btnResetCam" title="기본 시점(카메라) 초기화" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="compass" class="w-5 h-5 text-amber-400"></i>
+      </button>
+    </div>
+
+    <!-- 하단 바: 상태 수치 & 조작 가이드 -->
+    <div class="flex flex-col sm:flex-row items-end sm:items-center justify-between gap-4">
+      
+      <!-- 조작키 가이드 -->
+      <div class="pointer-events-auto bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl p-4 shadow-xl flex items-center gap-4">
+        <div class="grid grid-cols-3 gap-1 w-24 text-center text-xs font-mono">
+          <div></div>
+          <div class="bg-slate-800 border border-slate-600 rounded p-1 font-bold">W</div>
+          <div></div>
+          <div class="bg-slate-800 border border-slate-600 rounded p-1 font-bold">A</div>
+          <div class="bg-slate-800 border border-slate-600 rounded p-1 font-bold">S</div>
+          <div class="bg-slate-800 border border-slate-600 rounded p-1 font-bold">D</div>
+        </div>
+        <div class="text-xs text-slate-300">
+          <div class="font-semibold text-white">캐릭터 이동</div>
+          <div class="text-slate-400">WASD 또는 방향키</div>
+          <div class="text-slate-400 mt-0.5">마우스 드래그: 시점 회전 및 각도 조절</div>
+        </div>
+      </div>
+
+      <!-- 실시간 주행/계측 정보 -->
+      <div class="pointer-events-auto bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl px-5 py-3 shadow-xl flex items-center gap-6">
+        <div>
+          <div class="text-[10px] uppercase font-semibold text-slate-400">이동 속도</div>
+          <div class="text-lg font-bold font-mono text-emerald-400"><span id="speedVal">0.0</span> <span class="text-xs text-slate-400 font-sans">km/h</span></div>
+        </div>
+        <div class="h-8 w-px bg-slate-700/60"></div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold text-slate-400">진행 방위</div>
+          <div class="text-lg font-bold font-mono text-amber-400"><span id="headingVal">0</span>° <span id="headingCompass" class="text-xs text-slate-400 font-sans">북</span></div>
+        </div>
+        <div class="h-8 w-px bg-slate-700/60"></div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold text-slate-400">시점 틸트각</div>
+          <div class="text-lg font-bold font-mono text-blue-400"><span id="tiltVal">60</span>°</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Vite 메인 모듈 진입점 -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
