@@ -49,6 +49,12 @@
   <!-- 3D Canvas -->
   <canvas id="renderCanvas"></canvas>
 
+  <!-- 마우스 룩 모드 활성화 알림 배지 -->
+  <div id="pointerLockBadge" class="hidden pointer-events-none fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600/90 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-2xl border border-blue-400/60 backdrop-blur-md z-30 flex items-center gap-2 animate-bounce">
+    <i data-lucide="eye" class="w-4 h-4 text-cyan-300"></i>
+    <span>자유 시점 (마우스 룩) 활성화됨 · 마우스로 둘러보기 · ESC를 누르면 해제</span>
+  </div>
+
   <!-- Game HUD Overlay -->
   <div id="hud" class="pointer-events-none absolute inset-0 flex flex-col justify-between p-4 sm:p-6 z-10">
     
@@ -100,6 +106,9 @@
         <i data-lucide="map-pin" class="w-5 h-5 text-rose-400"></i>
       </button>
       <div class="h-px bg-slate-700/60 my-1"></div>
+      <button id="btnToggleMouseLook" onclick="togglePointerLock()" title="자유 시점 (마우스 룩) 모드 토글 (ESC로 해제)" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
+        <i data-lucide="eye" class="w-5 h-5 text-cyan-400"></i>
+      </button>
       <button onclick="resetCamera()" title="기본 시점(카메라) 초기화" class="p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center">
         <i data-lucide="compass" class="w-5 h-5 text-amber-400"></i>
       </button>
@@ -119,9 +128,10 @@
           <div class="bg-slate-800 border border-slate-600 rounded p-1 font-bold">D</div>
         </div>
         <div class="text-xs text-slate-300">
-          <div class="font-semibold text-white">캐릭터 이동</div>
-          <div class="text-slate-400">WASD 또는 방향키</div>
-          <div class="text-slate-400 mt-0.5">마우스 드래그: 시점 회전 및 각도 조절</div>
+          <div class="font-semibold text-white">시점 기준 조작 가이드</div>
+          <div class="text-slate-400">WASD / 방향키: 바라보는 시점 기준 이동 (한/영 지원)</div>
+          <div class="text-emerald-400 font-medium mt-0.5">마우스 이동: 클릭 없이 마우스만 움직여도 360° 시점 회전</div>
+          <div class="text-slate-400 mt-0.5">화면 클릭: 마우스 잠금 (무한 회전) · ESC: 해제 · 👁️ 버튼: 룩 ON/OFF</div>
         </div>
       </div>
 
@@ -179,6 +189,15 @@
     const maxSpeed = 14;
     let targetRotationY = 0;
     let animTime = 0;
+
+    // Mouse Camera Control States
+    let isPointerDragging = false;
+    let lastPointerX = 0;
+    let lastPointerY = 0;
+    let isPointerLocked = false;
+    let mouseLookEnabled = true;
+    let prevMouseX = null;
+    let prevMouseY = null;
 
     // Geographic Conversions Constants (Simulated Lat/Lng to World Scale)
     const LAT_DEGREE_IN_METERS = 111000; 
@@ -550,6 +569,7 @@
         container.shadowColor = "rgba(0,0,0,0.3)";
         container.shadowBlur = 8;
         container.shadowOffsetY = 4;
+        container.isPointerBlocker = false;
 
         const stack = new BABYLON.GUI.StackPanel();
         stack.isVertical = false;
@@ -648,13 +668,20 @@
       scene = new BABYLON.Scene(engine);
       scene.clearColor = new BABYLON.Color4(0.06, 0.09, 0.16, 1);
 
-      // Tilted Isometric-Style Camera setup (Tilt ~60 deg)
+      // Tilted Isometric-Style Camera setup
       camera = new BABYLON.ArcRotateCamera("TiltedMapCamera", -Math.PI / 2, Math.PI / 3, 40, BABYLON.Vector3.Zero(), scene);
-      camera.lowerBetaLimit = Math.PI / 6;  // Don't go completely overhead
-      camera.upperBetaLimit = Math.PI / 2.5; // Cap tilt to keep 2D map readable in 3D
-      camera.lowerRadiusLimit = 15;
-      camera.upperRadiusLimit = 75;
+      camera.lowerBetaLimit = 0.12;       // 약 7도 (수직 탑다운 조망 가능)
+      camera.upperBetaLimit = Math.PI / 2.05; // 약 87도 (수평 3인칭 조망 가능)
+      camera.lowerRadiusLimit = 10;
+      camera.upperRadiusLimit = 90;
+      camera.wheelPrecision = 20;
+
+      // Babylon 컨트롤 연결 후 키보드 이동 및 내장 포인터 제거 (커스텀 마우스 드래그 & 마우스 룩 사용)
       camera.attachControl(canvas, true);
+      if (camera.inputs) {
+        camera.inputs.removeByType("ArcRotateCameraKeyboardMoveInput");
+        camera.inputs.removeByType("ArcRotateCameraPointersInput");
+      }
 
       // Light Setup
       const dirLight = new BABYLON.DirectionalLight("dir01", new BABYLON.Vector3(-1, -2, -1), scene);
@@ -702,30 +729,52 @@
 
     // --- CHARACTER MOVEMENT & ANIMATION LOGIC ---
     function updateCharacterMovement() {
-      let moveX = 0;
-      let moveZ = 0;
+      const isW = !!(inputMap["w"] || inputMap["KeyW"] || inputMap["ArrowUp"] || inputMap["arrowup"] || inputMap["ㅈ"]);
+      const isS = !!(inputMap["s"] || inputMap["KeyS"] || inputMap["ArrowDown"] || inputMap["arrowdown"] || inputMap["ㄴ"]);
+      const isA = !!(inputMap["a"] || inputMap["KeyA"] || inputMap["ArrowLeft"] || inputMap["arrowleft"] || inputMap["ㅁ"]);
+      const isD = !!(inputMap["d"] || inputMap["KeyD"] || inputMap["ArrowRight"] || inputMap["arrowright"] || inputMap["ㅇ"]);
 
-      if (inputMap["w"] || inputMap["ArrowUp"]) moveZ += 1;
-      if (inputMap["s"] || inputMap["ArrowDown"]) moveZ -= 1;
-      if (inputMap["a"] || inputMap["ArrowLeft"]) moveX -= 1;
-      if (inputMap["d"] || inputMap["ArrowRight"]) moveX += 1;
+      let inputForward = 0;
+      let inputRight = 0;
 
-      isMoving = moveX !== 0 || moveZ !== 0;
+      if (isW) inputForward += 1;
+      if (isS) inputForward -= 1;
+      if (isD) inputRight += 1;
+      if (isA) inputRight -= 1;
 
-      if (isMoving) {
-        // Calculate input vector relative to camera rotation
-        const angle = Math.atan2(moveX, moveZ);
-        const cameraAngle = camera.alpha + Math.PI / 2;
-        targetRotationY = cameraAngle + angle;
+      isMoving = inputForward !== 0 || inputRight !== 0;
+
+      if (isMoving && camera) {
+        // 3D 구면 좌표계 카메라가 바라보는 X-Z 수평 평면상 전방 벡터 (카메라 위치 -> 대상)
+        const fwdX = -Math.cos(camera.alpha);
+        const fwdZ = -Math.sin(camera.alpha);
+
+        // 바라보는 방향의 우측(시계방향 90도) 벡터: (-sin(alpha), cos(alpha))
+        const rightX = -Math.sin(camera.alpha);
+        const rightZ = Math.cos(camera.alpha);
+
+        // 카메라 시점 기준 월드 이동 방향 벡터
+        let moveDirX = inputForward * fwdX + inputRight * rightX;
+        let moveDirZ = inputForward * fwdZ + inputRight * rightZ;
+
+        // 대각선 이동 시 속도 정규화
+        const mag = Math.hypot(moveDirX, moveDirZ);
+        if (mag > 0.0001) {
+          moveDirX /= mag;
+          moveDirZ /= mag;
+        }
+
+        // 캐릭터가 이동하려는 목표 방향각 (0 = +Z/북, PI/2 = +X/동)
+        targetRotationY = Math.atan2(moveDirX, moveDirZ);
 
         // Smooth rotation interpolation
         let rotDiff = targetRotationY - character.rotation.y;
         while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
         while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-        character.rotation.y += rotDiff * 0.18;
+        character.rotation.y += rotDiff * 0.22;
 
         // Velocity & Position
-        currentSpeed = Math.min(currentSpeed + 0.5, maxSpeed);
+        currentSpeed = Math.min(currentSpeed + 0.6, maxSpeed);
         const delta = engine.getDeltaTime() / 1000;
         const speedUnits = (currentSpeed * METERS_PER_UNIT) * delta * 0.08;
 
@@ -757,8 +806,8 @@
     function updateCameraFollow() {
       if (!camera || !character) return;
       const targetPos = character.position.clone();
-      targetPos.y += 1.0;
-      BABYLON.Vector3.LerpToRef(camera.target, targetPos, 0.1, camera.target);
+      targetPos.y += 1.2;
+      BABYLON.Vector3.LerpToRef(camera.target, targetPos, 0.15, camera.target);
     }
 
     // Real-time HUD Telemetry
@@ -781,13 +830,151 @@
       if (headingDeg < 0) headingDeg += 360;
       document.getElementById("headingVal").innerText = headingDeg;
 
-      const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      const directions = ["북 (N)", "북동 (NE)", "동 (E)", "남동 (SE)", "남 (S)", "남서 (SW)", "서 (W)", "북서 (NW)"];
       const dirIndex = Math.round(headingDeg / 45) % 8;
       document.getElementById("headingCompass").innerText = directions[dirIndex];
 
       // Tilt angle display
       const tiltDeg = Math.round((camera.beta * 180) / Math.PI);
       document.getElementById("tiltVal").innerText = tiltDeg;
+    }
+
+    // --- MOUSE CAMERA CONTROLS & POINTER LOCK ---
+    function setupMouseControl() {
+      if (!canvas) return;
+
+      // 우클릭 브라우저 메뉴 방지
+      canvas.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+      });
+
+      // 캔버스 클릭 시: 마우스 룩 모드가 켜져 있다면 포인터 락(화면 중앙 마우스 고정) 진입
+      canvas.addEventListener("click", () => {
+        if (mouseLookEnabled && !isPointerLocked) {
+          canvas.requestPointerLock();
+        }
+      });
+
+      // 좌클릭(0) 또는 우클릭(2) 드래그 시작 (드래그 조작도 병행 지원)
+      canvas.addEventListener("pointerdown", (e) => {
+        if (e.button === 0 || e.button === 2) {
+          if (!isPointerLocked) {
+            isPointerDragging = true;
+            lastPointerX = e.clientX;
+            lastPointerY = e.clientY;
+            try {
+              canvas.setPointerCapture(e.pointerId);
+            } catch (_) {}
+          }
+        }
+      });
+
+      // 마우스 이동 시 시점 회전 (마우스 클릭 없이 마우스만 움직여도 즉시 360° 시점 회전)
+      window.addEventListener("pointermove", (e) => {
+        if (!camera || !mouseLookEnabled) return;
+
+        // HUD 인터랙티브 요소(버튼, 패널 등) 위에 마우스가 있을 때는 버튼 클릭 편의를 위해 시점 회전 일시 정지
+        const isOverHUD = e.target && (e.target.closest && e.target.closest(".pointer-events-auto"));
+        if (isOverHUD && !isPointerLocked) {
+          prevMouseX = null;
+          prevMouseY = null;
+          return;
+        }
+
+        const SENSITIVITY_X = 0.0038;
+        const SENSITIVITY_Y = 0.0030;
+
+        let dx = 0;
+        let dy = 0;
+
+        if (isPointerLocked) {
+          dx = e.movementX;
+          dy = e.movementY;
+        } else {
+          if (prevMouseX === null || prevMouseY === null) {
+            prevMouseX = e.clientX;
+            prevMouseY = e.clientY;
+            return;
+          }
+          dx = (typeof e.movementX === "number" && e.movementX !== 0) ? e.movementX : (e.clientX - prevMouseX);
+          dy = (typeof e.movementY === "number" && e.movementY !== 0) ? e.movementY : (e.clientY - prevMouseY);
+          prevMouseX = e.clientX;
+          prevMouseY = e.clientY;
+        }
+
+        // 급격한 점프 방지
+        if (Math.abs(dx) > 120 || Math.abs(dy) > 120) return;
+
+        camera.alpha -= dx * SENSITIVITY_X;
+        camera.beta -= dy * SENSITIVITY_Y;
+
+        if (camera.beta < camera.lowerBetaLimit) camera.beta = camera.lowerBetaLimit;
+        if (camera.beta > camera.upperBetaLimit) camera.beta = camera.upperBetaLimit;
+      });
+
+      const stopPointerDrag = (e) => {
+        if (isPointerDragging) {
+          isPointerDragging = false;
+          try {
+            if (e && e.pointerId && canvas.hasPointerCapture(e.pointerId)) {
+              canvas.releasePointerCapture(e.pointerId);
+            }
+          } catch (_) {}
+        }
+      };
+
+      window.addEventListener("pointerup", stopPointerDrag);
+      window.addEventListener("pointercancel", stopPointerDrag);
+
+      // 브라우저 창 밖으로 나갈 때 좌표 초기화
+      document.addEventListener("mouseleave", () => {
+        prevMouseX = null;
+        prevMouseY = null;
+      });
+
+      // Pointer Lock 상태 변경 감지
+      document.addEventListener("pointerlockchange", () => {
+        isPointerLocked = (document.pointerLockElement === canvas);
+        if (isPointerLocked) {
+          isPointerDragging = false;
+        }
+        prevMouseX = null;
+        prevMouseY = null;
+        updatePointerLockUI();
+      });
+    }
+
+    window.togglePointerLock = function() {
+      mouseLookEnabled = !mouseLookEnabled;
+      if (!mouseLookEnabled && document.pointerLockElement === canvas) {
+        document.exitPointerLock();
+      }
+      prevMouseX = null;
+      prevMouseY = null;
+      updatePointerLockUI();
+    };
+
+    function updatePointerLockUI() {
+      const badge = document.getElementById("pointerLockBadge");
+      const btn = document.getElementById("btnToggleMouseLook");
+
+      if (badge) {
+        if (isPointerLocked) {
+          badge.classList.remove("hidden");
+        } else {
+          badge.classList.add("hidden");
+        }
+      }
+
+      if (btn) {
+        if (mouseLookEnabled) {
+          btn.className = "p-3 bg-blue-600 hover:bg-blue-500 backdrop-blur-md border border-blue-400 rounded-xl text-white transition shadow-lg shadow-blue-500/30 flex items-center justify-center";
+          btn.title = "마우스 룩 (클릭 없이 시점 회전) 활성화됨 [클릭하여 끄기]";
+        } else {
+          btn.className = "p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-400 hover:text-white transition shadow-lg flex items-center justify-center";
+          btn.title = "마우스 룩 (클릭 없이 시점 회전) 비활성화됨 [클릭하여 켜기]";
+        }
+      }
     }
 
     // --- GLOBAL INTERACTION FUNCTIONS (EXPORTED TO WINDOW) ---
@@ -799,6 +986,10 @@
       // Reset character position to center of map
       if (character) {
         character.position = new BABYLON.Vector3(0, 0, 0);
+        character.rotation.y = 0;
+      }
+      if (camera) {
+        camera.target = new BABYLON.Vector3(0, 1.2, 0);
       }
       
       renderMapTexture();
@@ -827,6 +1018,8 @@
     window.addEventListener("DOMContentLoaded", () => {
       engine = new BABYLON.Engine(canvas, true);
       createScene();
+      setupMouseControl();
+      updatePointerLockUI();
 
       engine.runRenderLoop(() => {
         if (scene) scene.render();

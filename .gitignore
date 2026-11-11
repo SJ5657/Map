@@ -22,3 +22,22 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Large raw Unity MoCap asset pack (keep only the core FBX clips used by build:animations)
+client/MoCapCentral/*
+!client/MoCapCentral/MC_CoreMotion/
+client/MoCapCentral/MC_CoreMotion/*
+!client/MoCapCentral/MC_CoreMotion/Animations/
+client/MoCapCentral/MC_CoreMotion/Animations/*
+!client/MoCapCentral/MC_CoreMotion/Animations/Idle/
+client/MoCapCentral/MC_CoreMotion/Animations/Idle/*
+!client/MoCapCentral/MC_CoreMotion/Animations/Idle/MCU_af_Stand_Idle_01.FBX
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/
+client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/*
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Walk/
+client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Walk/*
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Walk/MCU_af_Loco_Walk_Fwd_NoRM.FBX
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Walk/MCU_af_Loco_Walk_Fwd_NoRM.FBX.meta
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Run/
+client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Run/*
+!client/MoCapCentral/MC_CoreMotion/Animations/LocomotionV2/af_Run/MCU_af_Loco_Run_Fwd_NoRM.FBX
