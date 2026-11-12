@@ -20,7 +20,7 @@ let mapCanvas, mapContext;
 let mapStyle = 'light'; // 'light' | 'dark' | 'satellite'
 let guiTexture;
 const poi3DNodes = [];
-let showPOIs = true;
+let showPOIs = false;
 
 // Movement & VRM Animation States
 const inputMap = {};
@@ -92,49 +92,121 @@ function renderMapTexture() {
   const w = mapCanvas.width;
   const h = mapCanvas.height;
 
-  // Authentic Google Maps Theme Palette
+  // 순수 지형(Terrain-only) 테마 팔레트 (건물, 도로, 텍스트 라벨, POI 제외)
   const colors = {
     light: {
-      bg: "#f8f9fa",
-      block: "#e9ecef",
-      park: "#e6f4ea",
-      water: "#c6dafc",
-      roadMajor: "#fef08a",
-      roadMinor: "#ffffff",
-      roadBorder: "#dadce0",
-      building: "#dee2e6",
-      buildingStroke: "#ced4da"
+      bg: "#f1f5ec",
+      plain: "#e7efe0",
+      park: "#d3e8c9",
+      forest: "#b8dbb0",
+      hillShadow: "rgba(120, 155, 110, 0.16)",
+      contour: "rgba(110, 145, 100, 0.25)",
+      shore: "#e8dfc8",
+      water: "#a8ccf7",
+      waterDeep: "#8bb8f0"
     },
     dark: {
-      bg: "#171717",
-      block: "#262626",
-      park: "#0f291e",
-      water: "#1a365d",
-      roadMajor: "#854d0e",
-      roadMinor: "#3b3b3b",
-      roadBorder: "#262626",
-      building: "#404040",
-      buildingStroke: "#525252"
+      bg: "#141c18",
+      plain: "#18241e",
+      park: "#132e22",
+      forest: "#0e261b",
+      hillShadow: "rgba(5, 15, 10, 0.35)",
+      contour: "rgba(74, 124, 98, 0.22)",
+      shore: "#242822",
+      water: "#173254",
+      waterDeep: "#102542"
     },
     satellite: {
-      bg: "#1c2517",
-      block: "#293623",
-      park: "#14380c",
-      water: "#0f283d",
-      roadMajor: "#64748b",
-      roadMinor: "#475569",
-      roadBorder: "#0f172a",
-      building: "#3f4d38",
-      buildingStroke: "#52634a"
+      bg: "#26351e",
+      plain: "#2d4023",
+      park: "#1e3615",
+      forest: "#152b0e",
+      hillShadow: "rgba(0, 0, 0, 0.28)",
+      contour: "rgba(160, 195, 130, 0.15)",
+      shore: "#4a4635",
+      water: "#113047",
+      waterDeep: "#0b2236"
     }
   }[mapStyle];
 
-  // 1. Base Background
+  // 1. 기본 대지 배경 (Base Terrain Ground)
   ctx.fillStyle = colors.bg;
   ctx.fillRect(0, 0, w, h);
 
-  // 2. Water Body (Han River / Local Waters)
-  ctx.fillStyle = colors.water;
+  // 완만한 평야/지형 색조 변화
+  const plainGrad = ctx.createRadialGradient(w * 0.5, h * 0.55, w * 0.05, w * 0.5, h * 0.55, w * 0.7);
+  plainGrad.addColorStop(0, colors.plain);
+  plainGrad.addColorStop(1, colors.bg);
+  ctx.fillStyle = plainGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 자연 녹지 및 구릉 지형 (Parks, Forests & Natural Hills)
+  const hillRegions = [
+    { cx: w * 0.26, cy: h * 0.72, rx: w * 0.22, ry: h * 0.18, rot: -0.2 },
+    { cx: w * 0.76, cy: h * 0.68, rx: w * 0.20, ry: h * 0.22, rot: 0.35 },
+    { cx: w * 0.82, cy: h * 0.36, rx: w * 0.15, ry: h * 0.12, rot: -0.4 },
+    { cx: w * 0.18, cy: h * 0.38, rx: w * 0.14, ry: h * 0.11, rot: 0.15 },
+    { cx: w * 0.52, cy: h * 0.86, rx: w * 0.25, ry: h * 0.12, rot: 0.05 }
+  ];
+
+  hillRegions.forEach((hill) => {
+    ctx.save();
+    ctx.translate(hill.cx, hill.cy);
+    ctx.rotate(hill.rot);
+
+    // 외곽 구릉 사면
+    ctx.fillStyle = colors.park;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, hill.rx, hill.ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 내부 짙은 식생/고지대 영역
+    ctx.fillStyle = colors.forest;
+    ctx.beginPath();
+    ctx.ellipse(-hill.rx * 0.08, -hill.ry * 0.06, hill.rx * 0.65, hill.ry * 0.65, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 등고선 (Contour Lines) 표현
+    ctx.strokeStyle = colors.contour;
+    ctx.lineWidth = 2;
+    for (let s = 1.15; s >= 0.35; s -= 0.2) {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, hill.rx * s, hill.ry * s, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  });
+
+  // 전역 자연 등고선 결 추가
+  ctx.strokeStyle = colors.contour;
+  ctx.lineWidth = 1.5;
+  for (let i = 1; i <= 5; i++) {
+    ctx.beginPath();
+    const yBase = h * (0.28 + i * 0.13);
+    ctx.moveTo(0, yBase);
+    ctx.bezierCurveTo(
+      w * 0.33, yBase - 45 * Math.sin(i),
+      w * 0.66, yBase + 45 * Math.cos(i),
+      w, yBase - 20 * Math.sin(i * 1.5)
+    );
+    ctx.stroke();
+  }
+
+  // 3. 수변 모래톱/기슭 (Shoreline) & 강/하천 지형 (Water Body)
+  ctx.fillStyle = colors.shore;
+  ctx.beginPath();
+  ctx.moveTo(0, h * 0.165);
+  ctx.bezierCurveTo(w * 0.3, h * 0.115, w * 0.5, h * 0.365, w, h * 0.235);
+  ctx.lineTo(w, 0);
+  ctx.lineTo(0, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  const waterGrad = ctx.createLinearGradient(0, 0, 0, h * 0.35);
+  waterGrad.addColorStop(0, colors.waterDeep);
+  waterGrad.addColorStop(1, colors.water);
+  ctx.fillStyle = waterGrad;
   ctx.beginPath();
   ctx.moveTo(0, h * 0.15);
   ctx.bezierCurveTo(w * 0.3, h * 0.1, w * 0.5, h * 0.35, w, h * 0.22);
@@ -143,248 +215,15 @@ function renderMapTexture() {
   ctx.closePath();
   ctx.fill();
 
-  // Water Text Label
-  ctx.fillStyle = mapStyle === 'dark' ? "#60a5fa" : "#1a73e8";
-  ctx.font = "bold 26px Roboto, 'Noto Sans KR', sans-serif";
-  ctx.fillText("한강 (Han River)", w * 0.65, h * 0.12);
-
-  // 3. Parks & Greenery
-  ctx.fillStyle = colors.park;
-  ctx.beginPath();
-  ctx.roundRect(w * 0.15, h * 0.62, w * 0.28, h * 0.26, 32);
-  ctx.fill();
-  ctx.fillStyle = mapStyle === 'dark' ? "#34d399" : "#137333";
-  ctx.font = "600 24px 'Noto Sans KR', sans-serif";
-  ctx.fillText("🌳 도심 녹지 공원", w * 0.17, h * 0.75);
-
-  // 4. Urban Blocks & Buildings
-  ctx.fillStyle = colors.block;
-  const gridSize = 160;
-  const margin = 24;
-
-  for (let x = 80; x < w - 80; x += gridSize) {
-    for (let y = 80; y < h - 80; y += gridSize) {
-      if (y < h * 0.25 && x < w * 0.7) continue;
-
-      ctx.beginPath();
-      ctx.roundRect(x + margin / 2, y + margin / 2, gridSize - margin, gridSize - margin, 12);
-      ctx.fill();
-
-      ctx.fillStyle = colors.building;
-      ctx.strokeStyle = colors.buildingStroke;
-      ctx.lineWidth = 1.5;
-
-      const bMargin = 12;
-      const bw = (gridSize - margin - bMargin * 3) / 2;
-      const bh = (gridSize - margin - bMargin * 3) / 2;
-
-      for (let bx = 0; bx < 2; bx++) {
-        for (let by = 0; by < 2; by++) {
-          const rx = x + margin / 2 + bMargin + bx * (bw + bMargin);
-          const ry = y + margin / 2 + bMargin + by * (bh + bMargin);
-          
-          ctx.beginPath();
-          ctx.roundRect(rx, ry, bw, bh, 6);
-          ctx.fill();
-          ctx.stroke();
-        }
-      }
-      ctx.fillStyle = colors.block;
-    }
-  }
-
-  // 5. Road Grid
-  ctx.strokeStyle = colors.roadMinor;
-  ctx.lineWidth = 18;
-  ctx.lineCap = "round";
-
-  for (let x = 80; x < w; x += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
-  }
-  for (let y = 80; y < h; y += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-
-  // Major Avenues
-  ctx.strokeStyle = colors.roadBorder;
-  ctx.lineWidth = 36;
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.48);
-  ctx.lineTo(w, h * 0.48);
-  ctx.stroke();
-
-  ctx.strokeStyle = colors.roadMajor;
-  ctx.lineWidth = 28;
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.48);
-  ctx.lineTo(w, h * 0.48);
-  ctx.stroke();
-
-  // Main Vertical Avenue
-  ctx.strokeStyle = colors.roadBorder;
-  ctx.lineWidth = 38;
-  ctx.beginPath();
-  ctx.moveTo(w * 0.52, 0);
-  ctx.lineTo(w * 0.52, h);
-  ctx.stroke();
-
-  ctx.strokeStyle = colors.roadMajor;
-  ctx.lineWidth = 30;
-  ctx.beginPath();
-  ctx.moveTo(w * 0.52, 0);
-  ctx.lineTo(w * 0.52, h);
-  ctx.stroke();
-
-  // Subway Route
-  ctx.strokeStyle = GMAP_COLORS.subway7;
-  ctx.lineWidth = 10;
-  ctx.setLineDash([16, 8]);
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.48 + 26);
-  ctx.lineTo(w, h * 0.48 + 26);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Crosswalks
-  ctx.fillStyle = mapStyle === 'dark' ? "#64748b" : "#ffffff";
-  for (let i = -40; i <= 40; i += 12) {
-    ctx.fillRect(w * 0.52 + i - 4, h * 0.48 - 14, 8, 28);
-  }
-
-  // Road Name Labels
-  ctx.fillStyle = mapStyle === 'dark' ? "#9ca3af" : "#5f6368";
-  ctx.font = "500 22px 'Noto Sans KR', sans-serif";
-  
-  ctx.save();
-  ctx.translate(w * 0.25, h * 0.45);
-  ctx.fillText("학동로 (Hakdong-ro)", 0, 0);
-  ctx.restore();
-
-  ctx.save();
-  ctx.translate(w * 0.54, h * 0.35);
-  ctx.rotate(Math.PI / 2);
-  ctx.fillText("영동대로 (Yeongdong-daero)", 0, 0);
-  ctx.restore();
-
-  // 6. Draw POIs on Ground Texture (from backend currentPois)
-  currentPois.forEach(poi => {
-    const texX = ((poi.x + 150) / 300) * w;
-    const texY = ((150 - poi.z) / 300) * h;
-
-    ctx.save();
-    ctx.translate(texX, texY);
-
-    if (poi.type === "subway_exit") {
-      ctx.fillStyle = poi.color || GMAP_COLORS.subway7;
-      ctx.beginPath();
-      ctx.roundRect(-30, -14, 60, 28, 14);
-      ctx.fill();
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 12px 'Noto Sans KR', sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText((poi.icon || "🚪") + " 출구", 0, 0);
-    } else {
-      ctx.fillStyle = poi.color || GMAP_COLORS.landmark;
-      ctx.shadowColor = "rgba(0, 0, 0, 0.25)";
-      ctx.shadowBlur = 8;
-      ctx.shadowOffsetY = 4;
-
-      ctx.beginPath();
-      ctx.arc(0, -14, 18, 0, Math.PI * 2);
-      ctx.fill();
-      
-      ctx.beginPath();
-      ctx.moveTo(-10, -6);
-      ctx.lineTo(0, 10);
-      ctx.lineTo(10, -6);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.shadowColor = "transparent";
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 16px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(poi.icon || "📍", 0, -13);
-
-      ctx.fillStyle = mapStyle === 'dark' ? "rgba(30, 41, 59, 0.92)" : "rgba(255, 255, 255, 0.95)";
-      ctx.beginPath();
-      ctx.roundRect(-65, 14, 130, 26, 13);
-      ctx.fill();
-      ctx.strokeStyle = colors.roadBorder;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.fillStyle = mapStyle === 'dark' ? "#f1f5f9" : "#202124";
-      ctx.font = "600 13px 'Noto Sans KR', sans-serif";
-      ctx.fillText(poi.name, 0, 27);
-    }
-
-    ctx.restore();
-  });
-
   if (mapDynamicTexture) {
     mapDynamicTexture.update();
   }
 }
 
-// --- 3D FLOATING POI BILLBOARD OVERLAYS (BABYLON GUI) ---
+// --- 3D FLOATING POI BILLBOARD OVERLAYS (지형 전용 모드에서는 비활성화) ---
 function rebuild3DPOIMarkers() {
   poi3DNodes.forEach(node => node.dispose());
   poi3DNodes.length = 0;
-
-  if (!showPOIs || !guiTexture) return;
-
-  currentPois.forEach(poi => {
-    const anchor = new BABYLON.TransformNode(`poi_anchor_${poi.name}`, scene);
-    anchor.position = new BABYLON.Vector3(poi.x, 3.5, poi.z);
-
-    const container = new BABYLON.GUI.Rectangle();
-    container.width = "180px";
-    container.height = poi.type === "subway_exit" ? "32px" : "42px";
-    container.cornerRadius = 20;
-    container.color = poi.color || GMAP_COLORS.landmark;
-    container.thickness = 2;
-    container.background = mapStyle === 'dark' ? "rgba(15, 23, 42, 0.9)" : "rgba(255, 255, 255, 0.95)";
-    container.shadowColor = "rgba(0,0,0,0.3)";
-    container.shadowBlur = 8;
-    container.shadowOffsetY = 4;
-    container.isPointerBlocker = false; // 마우스 시점 드래그를 차단하지 않도록 설정
-
-    const stack = new BABYLON.GUI.StackPanel();
-    stack.isVertical = false;
-    container.addControl(stack);
-
-    const iconText = new BABYLON.GUI.TextBlock();
-    iconText.text = (poi.icon || "📍") + " ";
-    iconText.width = "30px";
-    iconText.fontSize = 16;
-    stack.addControl(iconText);
-
-    const nameText = new BABYLON.GUI.TextBlock();
-    nameText.text = poi.name;
-    nameText.color = mapStyle === 'dark' ? "#f8fafc" : "#1e293b";
-    nameText.fontSize = poi.type === "subway_exit" ? 12 : 13;
-    nameText.fontWeight = "bold";
-    nameText.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
-    stack.addControl(nameText);
-
-    guiTexture.addControl(container);
-    container.linkWithMesh(anchor);
-    container.linkOffsetY = -30;
-
-    poi3DNodes.push(anchor);
-    poi3DNodes.push(container);
-  });
 }
 
 // --- VRM CHARACTER CREATION & MTOON / MOCAP ANIMATION SYSTEM ---
