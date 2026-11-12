@@ -80,19 +80,26 @@
               </span>
             </div>
           </div>
-          <div id="locationName" class="text-base font-bold text-white truncate mt-0.5">서울 강남구 청담역 (7호선)</div>
-          <div class="text-xs font-mono text-blue-300 flex gap-3 mt-0.5">
-            <span>위도: <span id="latVal">37.519200</span>°N</span>
-            <span>경도: <span id="lngVal">127.053100</span>°E</span>
+          <div id="locationName" class="text-base font-bold text-white truncate mt-0.5">한국 서울 (한강·청담 지형)</div>
+          <div class="text-xs font-mono text-blue-300 flex flex-wrap gap-3 mt-0.5">
+            <span>위도: <span id="latVal">37.519200</span>°</span>
+            <span>경도: <span id="lngVal">127.053100</span>°</span>
+            <span class="text-emerald-300">해발: <span id="elevationVal">0</span>m</span>
           </div>
         </div>
       </div>
 
-      <!-- 위치 빠른 이동 버튼 (백엔드 API에서 동적 생성됨) -->
-      <div class="pointer-events-auto flex items-center gap-2 bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl p-2 shadow-xl">
-        <span class="text-xs font-semibold px-3 text-slate-400 hidden md:inline">빠른 이동:</span>
-        <div id="locationButtons" class="flex items-center gap-1.5">
+      <!-- 전세계 지형 빠른 이동 & 좌표 직접 이동 패널 -->
+      <div class="pointer-events-auto flex flex-wrap items-center gap-2 bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-2xl p-2 shadow-xl">
+        <span class="text-xs font-semibold px-2 text-slate-400 hidden md:inline">전세계 지형:</span>
+        <div id="locationButtons" class="flex flex-wrap items-center gap-1.5">
           <!-- JS에서 동적으로 버튼 추가 -->
+        </div>
+        <div class="h-5 w-px bg-slate-700/60 mx-1 hidden lg:block"></div>
+        <div class="flex items-center gap-1 text-xs">
+          <input id="customLatInput" type="number" step="0.0001" placeholder="위도(Lat)" class="w-20 bg-slate-800/90 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-blue-400" />
+          <input id="customLngInput" type="number" step="0.0001" placeholder="경도(Lng)" class="w-20 bg-slate-800/90 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-blue-400" />
+          <button id="btnTeleportCoord" title="입력한 전세계 위도/경도 지형으로 즉시 이동" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition">이동</button>
         </div>
       </div>
     </div>
@@ -158,6 +165,11 @@
         <div>
           <div class="text-[10px] uppercase font-semibold text-slate-400">시점 틸트각</div>
           <div class="text-lg font-bold font-mono text-blue-400"><span id="tiltVal">60</span>°</div>
+        </div>
+        <div class="h-8 w-px bg-slate-700/60"></div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold text-slate-400">퍼포먼스</div>
+          <div class="text-lg font-bold font-mono text-cyan-400"><span id="fpsVal">60</span> <span class="text-xs text-slate-400 font-sans">FPS</span></div>
         </div>
       </div>
 

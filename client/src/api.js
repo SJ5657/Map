@@ -6,10 +6,12 @@ const API_BASE = "/api";
 
 // 오프라인 fallback 데이터
 const FALLBACK_LOCATIONS = [
-  { id: "cheongdam", name: "서울 강남구 청담역 (7호선)", lat: 37.519200, lng: 127.053100 },
-  { id: "gangnam", name: "서울 강남대로 (강남역)", lat: 37.497900, lng: 127.027600 },
-  { id: "shibuya", name: "도쿄 시부야 스크램블", lat: 35.659500, lng: 139.700400 },
-  { id: "timesSquare", name: "뉴욕 타임스퀘어", lat: 40.758000, lng: -73.985500 }
+  { id: "cheongdam", name: "한국 서울 (한강·청담 지형)", lat: 37.519200, lng: 127.053100 },
+  { id: "hallasan", name: "한국 제주 (한라산 화산지형)", lat: 33.361700, lng: 126.529200 },
+  { id: "fujisan", name: "일본 시즈오카 (후지산)", lat: 35.360600, lng: 138.727400 },
+  { id: "matterhorn", name: "스위스 알프스 (마테호른)", lat: 45.976300, lng: 7.658600 },
+  { id: "grandCanyon", name: "미국 애리조나 (그랜드 캐니언)", lat: 36.054400, lng: -112.140100 },
+  { id: "everest", name: "네팔 히말라야 (에베레스트)", lat: 27.988100, lng: 86.925000 }
 ];
 
 export async function checkServerHealth() {

@@ -1,26 +1,23 @@
-import { fetchLocations, fetchLocationPOIs, checkServerHealth } from "./api.js";
+import { fetchLocations, checkServerHealth } from "./api.js";
+import { WorldTerrainManager } from "./worldTerrain.js";
 
 // 글로벌 상태
 let locationsList = [];
 let currentLocation = {
   id: "cheongdam",
-  name: "서울 강남구 청담역 (7호선)",
+  name: "한국 서울 (한강·청담 지형)",
   lat: 37.519200,
   lng: 127.053100
 };
-let currentPois = [];
 
 // Canvas & Babylon Engine Variables
 const canvas = document.getElementById("renderCanvas");
 let engine, scene, camera, dirLight, hemiLight, shadowGenerator, glowLayer;
 let skyDome, skyTexture, skyContext, sunMesh, sunHalo;
 let character;
-let ground, groundMaterial, mapDynamicTexture;
-let mapCanvas, mapContext;
-let mapStyle = 'light'; // 'light' | 'dark' | 'satellite'
-let guiTexture;
-const poi3DNodes = [];
-let showPOIs = false;
+let worldTerrain = null;
+let mapStyle = "light"; // 'light' | 'dark' | 'satellite'
+let lastHudUpdateTime = 0;
 
 // Movement & VRM Animation States
 const inputMap = {};
@@ -44,6 +41,7 @@ const animWeights = { idle: 1.0, walk: 0.0, run: 0.0 };
 // Pre-allocated temp objects for zero-GC real-time Slerp blending
 let _qIdle, _qWalk, _qRun, _qLoco, _qF0, _qF1, _qNeg;
 let _vIdle, _vWalk, _vRun, _vLoco, _vF0, _vF1;
+let _camTargetTemp = null;
 
 // Mouse Camera Control States
 let isPointerDragging = false;
@@ -55,176 +53,8 @@ let prevMouseX = null;
 let prevMouseY = null;
 
 // Geographic Conversions Constants (Simulated Lat/Lng to World Scale)
-const LAT_DEGREE_IN_METERS = 111000;
 const METERS_PER_UNIT = 5;
 
-// Google Maps Exact Color Palette Constants
-const GMAP_COLORS = {
-  subway7: "#747F00",
-  subway2: "#2DB400",
-  subway9: "#BDB092",
-  subwayShin: "#D4003B",
-  hospital: "#EA4335",
-  shopping: "#F29900",
-  food: "#E65100",
-  landmark: "#1A73E8",
-  park: "#137333",
-  transit: "#0070C0"
-};
-
-// --- PROCEDURAL GOOGLE MAPS 2D CANVASES & VECTOR LABELS ---
-function createMapCanvasTexture() {
-  mapCanvas = document.createElement("canvas");
-  mapCanvas.width = 2048;
-  mapCanvas.height = 2048;
-  mapContext = mapCanvas.getContext("2d");
-
-  // DynamicTexture를 먼저 생성한 뒤 renderMapTexture()를 호출하여 초기 프레임부터 즉시 지도가 GPU에 업로드/활성화되도록 보장
-  mapDynamicTexture = new BABYLON.DynamicTexture("mapDynamicTexture", mapCanvas, scene, true);
-  mapDynamicTexture.anisotropicFilteringLevel = 8;
-  renderMapTexture();
-  return mapDynamicTexture;
-}
-
-function renderMapTexture() {
-  if (!mapContext) return;
-  const ctx = mapContext;
-  const w = mapCanvas.width;
-  const h = mapCanvas.height;
-
-  // 순수 지형(Terrain-only) 테마 팔레트 (건물, 도로, 텍스트 라벨, POI 제외)
-  const colors = {
-    light: {
-      bg: "#f1f5ec",
-      plain: "#e7efe0",
-      park: "#d3e8c9",
-      forest: "#b8dbb0",
-      hillShadow: "rgba(120, 155, 110, 0.16)",
-      contour: "rgba(110, 145, 100, 0.25)",
-      shore: "#e8dfc8",
-      water: "#a8ccf7",
-      waterDeep: "#8bb8f0"
-    },
-    dark: {
-      bg: "#141c18",
-      plain: "#18241e",
-      park: "#132e22",
-      forest: "#0e261b",
-      hillShadow: "rgba(5, 15, 10, 0.35)",
-      contour: "rgba(74, 124, 98, 0.22)",
-      shore: "#242822",
-      water: "#173254",
-      waterDeep: "#102542"
-    },
-    satellite: {
-      bg: "#26351e",
-      plain: "#2d4023",
-      park: "#1e3615",
-      forest: "#152b0e",
-      hillShadow: "rgba(0, 0, 0, 0.28)",
-      contour: "rgba(160, 195, 130, 0.15)",
-      shore: "#4a4635",
-      water: "#113047",
-      waterDeep: "#0b2236"
-    }
-  }[mapStyle];
-
-  // 1. 기본 대지 배경 (Base Terrain Ground)
-  ctx.fillStyle = colors.bg;
-  ctx.fillRect(0, 0, w, h);
-
-  // 완만한 평야/지형 색조 변화
-  const plainGrad = ctx.createRadialGradient(w * 0.5, h * 0.55, w * 0.05, w * 0.5, h * 0.55, w * 0.7);
-  plainGrad.addColorStop(0, colors.plain);
-  plainGrad.addColorStop(1, colors.bg);
-  ctx.fillStyle = plainGrad;
-  ctx.fillRect(0, 0, w, h);
-
-  // 2. 자연 녹지 및 구릉 지형 (Parks, Forests & Natural Hills)
-  const hillRegions = [
-    { cx: w * 0.26, cy: h * 0.72, rx: w * 0.22, ry: h * 0.18, rot: -0.2 },
-    { cx: w * 0.76, cy: h * 0.68, rx: w * 0.20, ry: h * 0.22, rot: 0.35 },
-    { cx: w * 0.82, cy: h * 0.36, rx: w * 0.15, ry: h * 0.12, rot: -0.4 },
-    { cx: w * 0.18, cy: h * 0.38, rx: w * 0.14, ry: h * 0.11, rot: 0.15 },
-    { cx: w * 0.52, cy: h * 0.86, rx: w * 0.25, ry: h * 0.12, rot: 0.05 }
-  ];
-
-  hillRegions.forEach((hill) => {
-    ctx.save();
-    ctx.translate(hill.cx, hill.cy);
-    ctx.rotate(hill.rot);
-
-    // 외곽 구릉 사면
-    ctx.fillStyle = colors.park;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, hill.rx, hill.ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 내부 짙은 식생/고지대 영역
-    ctx.fillStyle = colors.forest;
-    ctx.beginPath();
-    ctx.ellipse(-hill.rx * 0.08, -hill.ry * 0.06, hill.rx * 0.65, hill.ry * 0.65, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 등고선 (Contour Lines) 표현
-    ctx.strokeStyle = colors.contour;
-    ctx.lineWidth = 2;
-    for (let s = 1.15; s >= 0.35; s -= 0.2) {
-      ctx.beginPath();
-      ctx.ellipse(0, 0, hill.rx * s, hill.ry * s, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  });
-
-  // 전역 자연 등고선 결 추가
-  ctx.strokeStyle = colors.contour;
-  ctx.lineWidth = 1.5;
-  for (let i = 1; i <= 5; i++) {
-    ctx.beginPath();
-    const yBase = h * (0.28 + i * 0.13);
-    ctx.moveTo(0, yBase);
-    ctx.bezierCurveTo(
-      w * 0.33, yBase - 45 * Math.sin(i),
-      w * 0.66, yBase + 45 * Math.cos(i),
-      w, yBase - 20 * Math.sin(i * 1.5)
-    );
-    ctx.stroke();
-  }
-
-  // 3. 수변 모래톱/기슭 (Shoreline) & 강/하천 지형 (Water Body)
-  ctx.fillStyle = colors.shore;
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.165);
-  ctx.bezierCurveTo(w * 0.3, h * 0.115, w * 0.5, h * 0.365, w, h * 0.235);
-  ctx.lineTo(w, 0);
-  ctx.lineTo(0, 0);
-  ctx.closePath();
-  ctx.fill();
-
-  const waterGrad = ctx.createLinearGradient(0, 0, 0, h * 0.35);
-  waterGrad.addColorStop(0, colors.waterDeep);
-  waterGrad.addColorStop(1, colors.water);
-  ctx.fillStyle = waterGrad;
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.15);
-  ctx.bezierCurveTo(w * 0.3, h * 0.1, w * 0.5, h * 0.35, w, h * 0.22);
-  ctx.lineTo(w, 0);
-  ctx.lineTo(0, 0);
-  ctx.closePath();
-  ctx.fill();
-
-  if (mapDynamicTexture) {
-    mapDynamicTexture.update();
-  }
-}
-
-// --- 3D FLOATING POI BILLBOARD OVERLAYS (지형 전용 모드에서는 비활성화) ---
-function rebuild3DPOIMarkers() {
-  poi3DNodes.forEach(node => node.dispose());
-  poi3DNodes.length = 0;
-}
 
 // --- VRM CHARACTER CREATION & MTOON / MOCAP ANIMATION SYSTEM ---
 function initAnimTempObjects() {
@@ -681,22 +511,20 @@ function createScene() {
   // 하늘(SkyDome)과 태양(Sun) 생성
   createSkyAndSun();
 
-  // 구글 맵 3D 지면 생성 (기본 즉시 활성화 + 태양빛 반사 및 그림자 수신)
-  ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 300, height: 300 }, scene);
-  groundMaterial = new BABYLON.StandardMaterial("groundMat", scene);
-  groundMaterial.diffuseTexture = createMapCanvasTexture();
-  groundMaterial.specularColor = new BABYLON.Color3(0.22, 0.20, 0.16);
-  groundMaterial.specularPower = 48;
-  groundMaterial.maxSimultaneousLights = 6;
-  ground.material = groundMaterial;
-  ground.receiveShadows = true;
-
-  guiTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+  // 전세계 실시간 3D 지형(World Terrain) 청크 풀링 매니저 초기화
+  worldTerrain = new WorldTerrainManager(scene, {
+    lat: currentLocation.lat,
+    lng: currentLocation.lng,
+    mapStyle
+  });
 
   createCharacter();
 
   scene.onKeyboardObservable.add((kbInfo) => {
     const evt = kbInfo.event;
+    // 위도/경도 input 입력창 포커스 중에는 캐릭터 이동 단축키 무시
+    if (evt.target && evt.target.tagName === "INPUT") return;
+
     if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN) {
       inputMap[evt.key.toLowerCase()] = true;
       inputMap[evt.code] = true;
@@ -712,6 +540,9 @@ function createScene() {
 
   scene.registerBeforeRender(() => {
     updateCharacterMovement();
+    if (worldTerrain && character) {
+      worldTerrain.updateAroundPosition(character.position.x, character.position.z);
+    }
     updateCameraFollow();
     updateTelemetryHUD();
   });
@@ -779,17 +610,34 @@ function updateCharacterMovement() {
     character.position.x += Math.sin(character.rotation.y) * speedUnits;
     character.position.z += Math.cos(character.rotation.y) * speedUnits;
 
-    character.position.x = Math.max(-140, Math.min(140, character.position.x));
-    character.position.z = Math.max(-140, Math.min(140, character.position.z));
+    // Floating Origin (부동 원점 리베이스): 원점에서 2,500 유닛(12.5km) 이상 멀어지면 정밀도 유지를 위해 원점 시프트
+    if (worldTerrain && (Math.abs(character.position.x) > 2500 || Math.abs(character.position.z) > 2500)) {
+      const newCoord = worldTerrain.worldToLatLng(character.position.x, character.position.z);
+      currentLocation.lat = newCoord.lat;
+      currentLocation.lng = newCoord.lng;
+      character.position.x = 0;
+      character.position.z = 0;
+      worldTerrain.setOriginLatLng(newCoord.lat, newCoord.lng);
+      if (camera) {
+        camera.target.x = 0;
+        camera.target.z = 0;
+      }
+    }
   } else {
     currentSpeed = Math.max(currentSpeed - 0.9, 0);
   }
 
-  // 태양 그림자 투영 중심이 항상 캐릭터 위치를 따라가도록 갱신 (맵 어디서든 고해상도 그림자 유지)
+  // 캐릭터가 전세계 3D 지형(산/언덕/평야/수변) 고도를 자연스럽게 밟고 이동하도록 높이 보간
+  if (worldTerrain && character) {
+    const targetGroundY = worldTerrain.getTerrainHeightAtWorld(character.position.x, character.position.z);
+    character.position.y += (targetGroundY - character.position.y) * Math.min(1.0, delta * 14.0);
+  }
+
+  // 태양 그림자 투영 중심이 항상 캐릭터 위치(x, y, z)를 따라가도록 갱신 (고산 지대에서도 선명한 그림자 유지)
   if (dirLight && character) {
     dirLight.position.set(
       character.position.x + 18,
-      26,
+      character.position.y + 26,
       character.position.z + 16
     );
   }
@@ -800,31 +648,36 @@ function updateCharacterMovement() {
 
 function updateCameraFollow() {
   if (!camera || !character) return;
-  const targetPos = character.position.clone();
-  targetPos.y += 2.2;
-  BABYLON.Vector3.LerpToRef(camera.target, targetPos, 0.15, camera.target);
+  if (!_camTargetTemp) _camTargetTemp = new BABYLON.Vector3();
+  _camTargetTemp.set(character.position.x, character.position.y + 2.2, character.position.z);
+  BABYLON.Vector3.LerpToRef(camera.target, _camTargetTemp, 0.15, camera.target);
 }
 
 function updateTelemetryHUD() {
-  if (!character) return;
+  if (!character || !worldTerrain) return;
 
-  const latOffset = (character.position.z * METERS_PER_UNIT) / LAT_DEGREE_IN_METERS;
-  const lngOffset = (character.position.x * METERS_PER_UNIT) / (LAT_DEGREE_IN_METERS * Math.cos(currentLocation.lat * Math.PI / 180));
+  // DOM Reflow 최적화를 위해 80ms 간격(초당 ~12회)으로만 HUD 텍스트 갱신
+  const now = performance.now();
+  if (now - lastHudUpdateTime < 80) return;
+  lastHudUpdateTime = now;
 
-  const currentLat = (currentLocation.lat + latOffset).toFixed(6);
-  const currentLng = (currentLocation.lng + lngOffset).toFixed(6);
+  const sample = worldTerrain.sampleElevationData(character.position.x, character.position.z);
 
   const latEl = document.getElementById("latVal");
   const lngEl = document.getElementById("lngVal");
+  const elevEl = document.getElementById("elevationVal");
   const speedEl = document.getElementById("speedVal");
   const headingEl = document.getElementById("headingVal");
   const compassEl = document.getElementById("headingCompass");
   const tiltEl = document.getElementById("tiltVal");
   const motionEl = document.getElementById("motionStateVal");
+  const fpsEl = document.getElementById("fpsVal");
 
-  if (latEl) latEl.innerText = currentLat;
-  if (lngEl) lngEl.innerText = currentLng;
+  if (latEl) latEl.innerText = sample.lat.toFixed(6);
+  if (lngEl) lngEl.innerText = sample.lng.toFixed(6);
+  if (elevEl) elevEl.innerText = sample.elevationMeters;
   if (speedEl) speedEl.innerText = (currentSpeed * 1.2).toFixed(1);
+  if (fpsEl && engine) fpsEl.innerText = Math.round(engine.getFps());
 
   if (motionEl) {
     if (!isMoving) {
@@ -853,32 +706,48 @@ function updateTelemetryHUD() {
   }
 }
 
-// 위치 이동 함수 (백엔드에서 POI 새로 가져옴)
-async function teleportTo(locationKey) {
-  const targetLoc = locationsList.find(loc => loc.id === locationKey) || locationsList[0];
-  if (!targetLoc) return;
+// 전세계 임의 위도/경도로 즉시 텔레포트
+function teleportToCoordinates(lat, lng, labelName, activeId = null) {
+  const numLat = Number(lat);
+  const numLng = Number(lng);
+  if (!Number.isFinite(numLat) || !Number.isFinite(numLng)) return;
 
-  currentLocation = { ...targetLoc };
+  currentLocation = {
+    id: activeId || "custom",
+    name: labelName || `전세계 지형 (${numLat.toFixed(4)}°, ${numLng.toFixed(4)}°)`,
+    lat: numLat,
+    lng: numLng
+  };
+
   const locNameEl = document.getElementById("locationName");
   if (locNameEl) locNameEl.innerText = currentLocation.name;
 
+  const latInput = document.getElementById("customLatInput");
+  const lngInput = document.getElementById("customLngInput");
+  if (latInput) latInput.value = numLat.toFixed(4);
+  if (lngInput) lngInput.value = numLng.toFixed(4);
+
+  if (worldTerrain) {
+    worldTerrain.setOriginLatLng(numLat, numLng);
+  }
+
+  const spawnY = worldTerrain ? worldTerrain.getTerrainHeightAtWorld(0, 0) : 0;
   if (character) {
-    character.position = new BABYLON.Vector3(0, 0, 0);
+    character.position.set(0, spawnY, 0);
     character.rotation.y = 0;
   }
   if (camera) {
-    camera.target = new BABYLON.Vector3(0, 2.2, 0);
+    camera.target.set(0, spawnY + 2.2, 0);
   }
 
-  // 백엔드 API에서 해당 위치의 POI 비동기 조회
-  currentPois = await fetchLocationPOIs(currentLocation.id);
+  updateLocationButtonsUI(activeId);
+}
 
-  // 버튼 활성화 스타일 업데이트
-  updateLocationButtonsUI(locationKey);
-
-  // 지도 텍스처 및 3D 마커 갱신
-  renderMapTexture();
-  rebuild3DPOIMarkers();
+// 프리셋 지역 이동 함수
+async function teleportTo(locationKey) {
+  const targetLoc = locationsList.find(loc => loc.id === locationKey) || locationsList[0];
+  if (!targetLoc) return;
+  teleportToCoordinates(targetLoc.lat, targetLoc.lng, targetLoc.name, targetLoc.id);
 }
 
 function updateLocationButtonsUI(activeId) {
@@ -886,9 +755,9 @@ function updateLocationButtonsUI(activeId) {
   buttons.forEach(btn => {
     const locId = btn.getAttribute("data-loc-id");
     if (locId === activeId) {
-      btn.className = "px-3 py-1.5 text-xs font-medium rounded-xl bg-blue-600 hover:bg-blue-500 transition text-white border border-blue-400 shadow-md";
+      btn.className = "px-2.5 py-1 text-xs font-medium rounded-xl bg-blue-600 hover:bg-blue-500 transition text-white border border-blue-400 shadow-md";
     } else {
-      btn.className = "px-3 py-1.5 text-xs font-medium rounded-xl bg-slate-800 hover:bg-blue-600 transition text-slate-200 hover:text-white border border-slate-700";
+      btn.className = "px-2.5 py-1 text-xs font-medium rounded-xl bg-slate-800 hover:bg-blue-600 transition text-slate-200 hover:text-white border border-slate-700";
     }
   });
 }
@@ -906,9 +775,9 @@ function renderLocationButtons() {
     btn.onclick = () => teleportTo(loc.id);
 
     if (loc.id === currentLocation.id) {
-      btn.className = "px-3 py-1.5 text-xs font-medium rounded-xl bg-blue-600 hover:bg-blue-500 transition text-white border border-blue-400 shadow-md";
+      btn.className = "px-2.5 py-1 text-xs font-medium rounded-xl bg-blue-600 hover:bg-blue-500 transition text-white border border-blue-400 shadow-md";
     } else {
-      btn.className = "px-3 py-1.5 text-xs font-medium rounded-xl bg-slate-800 hover:bg-blue-600 transition text-slate-200 hover:text-white border border-slate-700";
+      btn.className = "px-2.5 py-1 text-xs font-medium rounded-xl bg-slate-800 hover:bg-blue-600 transition text-slate-200 hover:text-white border border-slate-700";
     }
 
     container.appendChild(btn);
@@ -919,7 +788,6 @@ function updateMapControlButtonsUI() {
   const lightBtn = document.getElementById("btnMapLight");
   const darkBtn = document.getElementById("btnMapDark");
   const satBtn = document.getElementById("btnMapSat");
-  const poiBtn = document.getElementById("btnTogglePOI");
 
   const activeCls = "p-3 bg-blue-600/90 hover:bg-blue-500 backdrop-blur-md border border-blue-400 rounded-xl text-white transition shadow-lg shadow-blue-500/30 flex items-center justify-center";
   const inactiveCls = "p-3 bg-slate-900/85 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 rounded-xl text-slate-200 hover:text-white transition shadow-lg flex items-center justify-center";
@@ -927,7 +795,6 @@ function updateMapControlButtonsUI() {
   if (lightBtn) lightBtn.className = mapStyle === "light" ? activeCls : inactiveCls;
   if (darkBtn) darkBtn.className = mapStyle === "dark" ? activeCls : inactiveCls;
   if (satBtn) satBtn.className = mapStyle === "satellite" ? activeCls : inactiveCls;
-  if (poiBtn) poiBtn.className = showPOIs ? activeCls : inactiveCls;
 }
 
 // 이벤트 리스너 바인딩
@@ -935,34 +802,41 @@ function setupUIEventListeners() {
   const lightBtn = document.getElementById("btnMapLight");
   const darkBtn = document.getElementById("btnMapDark");
   const satBtn = document.getElementById("btnMapSat");
-  const poiBtn = document.getElementById("btnTogglePOI");
   const resetBtn = document.getElementById("btnResetCam");
   const mouseLookBtn = document.getElementById("btnToggleMouseLook");
+  const teleportCoordBtn = document.getElementById("btnTeleportCoord");
+  const latInput = document.getElementById("customLatInput");
+  const lngInput = document.getElementById("customLngInput");
+
+  if (latInput) latInput.value = currentLocation.lat.toFixed(4);
+  if (lngInput) lngInput.value = currentLocation.lng.toFixed(4);
+
+  if (teleportCoordBtn) {
+    teleportCoordBtn.onclick = () => {
+      const lat = parseFloat(latInput ? latInput.value : "");
+      const lng = parseFloat(lngInput ? lngInput.value : "");
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        teleportToCoordinates(lat, lng, `전세계 지형 (${lat.toFixed(4)}°, ${lng.toFixed(4)}°)`);
+      }
+    };
+  }
 
   if (lightBtn) lightBtn.onclick = () => {
-    mapStyle = 'light';
-    renderMapTexture();
+    mapStyle = "light";
+    if (worldTerrain) worldTerrain.setMapStyle("light");
     renderSkyDomeTexture();
-    rebuild3DPOIMarkers();
     updateMapControlButtonsUI();
   };
   if (darkBtn) darkBtn.onclick = () => {
-    mapStyle = 'dark';
-    renderMapTexture();
+    mapStyle = "dark";
+    if (worldTerrain) worldTerrain.setMapStyle("dark");
     renderSkyDomeTexture();
-    rebuild3DPOIMarkers();
     updateMapControlButtonsUI();
   };
   if (satBtn) satBtn.onclick = () => {
-    mapStyle = 'satellite';
-    renderMapTexture();
+    mapStyle = "satellite";
+    if (worldTerrain) worldTerrain.setMapStyle("satellite");
     renderSkyDomeTexture();
-    rebuild3DPOIMarkers();
-    updateMapControlButtonsUI();
-  };
-  if (poiBtn) poiBtn.onclick = () => {
-    showPOIs = !showPOIs;
-    rebuild3DPOIMarkers();
     updateMapControlButtonsUI();
   };
   if (mouseLookBtn) mouseLookBtn.onclick = () => { toggleMouseLookMode(); };
@@ -1148,19 +1022,17 @@ async function initApp() {
   locationsList = await fetchLocations();
   if (locationsList.length > 0) {
     currentLocation = { ...locationsList[0] };
+    const locNameEl = document.getElementById("locationName");
+    if (locNameEl) locNameEl.innerText = currentLocation.name;
   }
 
   // 상단 빠른 이동 버튼 동적 렌더링
   renderLocationButtons();
 
-  // 첫 번째 위치의 POI 목록 조회
-  currentPois = await fetchLocationPOIs(currentLocation.id);
-
   // Babylon 엔진 및 씬 초기화
   engine = new BABYLON.Engine(canvas, true);
   createScene();
   setupMouseControl();
-  rebuild3DPOIMarkers();
 
   // UI 이벤트 리스너 설정
   setupUIEventListeners();
